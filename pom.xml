@@ -44,7 +44,7 @@
         <jcommander.version>1.72</jcommander.version>
         <rocketmq-remoting.version>5.1.0</rocketmq-remoting.version>
         <sonar.java.coveragePlugin>jacoco</sonar.java.coveragePlugin>
-        <commons-lang3.version>3.12.0</commons-lang3.version>
+        <commons-lang3.version>3.18.0</commons-lang3.version>
         <opentelemetry.version>1.26.0</opentelemetry.version>
         <opentelemetry-exporter-prometheus.version>1.26.0-alpha</opentelemetry-exporter-prometheus.version>
         <jul-to-slf4j.version>2.0.6</jul-to-slf4j.version>
