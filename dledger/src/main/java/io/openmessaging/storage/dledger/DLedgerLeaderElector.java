@@ -157,6 +157,7 @@ public class DLedgerLeaderElector {
             if (memberState.currTerm() == term) {
                 memberState.changeToLeader(term);
                 lastSendHeartBeatTime = -1;
+                lastParseResult = VoteResponse.ParseResult.WAIT_TO_REVOTE;  // Reset parse result state
                 handleRoleChange(term, MemberState.Role.LEADER);
                 LOGGER.info("[{}] [ChangeRoleToLeader] from term: {} and currTerm: {}", memberState.getSelfId(), term, memberState.currTerm());
             } else {
@@ -169,6 +170,8 @@ public class DLedgerLeaderElector {
         synchronized (memberState) {
             if (term >= memberState.currTerm()) {
                 memberState.changeToCandidate(term);
+                lastParseResult = VoteResponse.ParseResult.WAIT_TO_REVOTE;  // Reset parse result for new election
+                nextTimeToRequestVote = -1;  // Reset vote timing to allow immediate first vote
                 handleRoleChange(term, MemberState.Role.CANDIDATE);
                 LOGGER.info("[{}] [ChangeRoleToCandidate] from term: {} and currTerm: {}", memberState.getSelfId(), term, memberState.currTerm());
             } else {
@@ -185,11 +188,15 @@ public class DLedgerLeaderElector {
     }
 
     public void changeRoleToFollower(long term, String leaderId) {
-        LOGGER.info("[{}][ChangeRoleToFollower] from term: {} leaderId: {} and currTerm: {}", memberState.getSelfId(), term, leaderId, memberState.currTerm());
-        lastParseResult = VoteResponse.ParseResult.WAIT_TO_REVOTE;
-        memberState.changeToFollower(term, leaderId);
-        lastLeaderHeartBeatTime = System.currentTimeMillis();
-        handleRoleChange(term, MemberState.Role.FOLLOWER);
+        synchronized (memberState) {
+            LOGGER.info("[{}][ChangeRoleToFollower] from term: {} leaderId: {} and currTerm: {}",
+                    memberState.getSelfId(), term, leaderId, memberState.currTerm());
+            lastParseResult = VoteResponse.ParseResult.WAIT_TO_REVOTE;
+            nextTimeToRequestVote = -1; // Reset vote timing to prevent immediate voting
+            memberState.changeToFollower(term, leaderId);
+            lastLeaderHeartBeatTime = System.currentTimeMillis();
+            handleRoleChange(term, MemberState.Role.FOLLOWER);
+        }
     }
 
     public CompletableFuture<VoteResponse> handleVote(VoteRequest request, boolean self) {
@@ -419,7 +426,7 @@ public class DLedgerLeaderElector {
             if (lastParseResult == VoteResponse.ParseResult.WAIT_TO_VOTE_NEXT || needIncreaseTermImmediately) {
                 long prevTerm = memberState.currTerm();
                 term = memberState.nextTerm();
-                LOGGER.info("{}_[INCREASE_TERM] from {} to {}", memberState.getSelfId(), prevTerm, term);
+                LOGGER.info("{}_[INCREASE_TERM] from {} to {}, lastParseResult: {}, needIncreaseTermImmediately: {}", memberState.getSelfId(), prevTerm, term, lastParseResult, needIncreaseTermImmediately);
                 lastParseResult = VoteResponse.ParseResult.WAIT_TO_REVOTE;
             } else {
                 term = memberState.currTerm();
