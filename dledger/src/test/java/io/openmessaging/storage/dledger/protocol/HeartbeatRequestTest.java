@@ -100,7 +100,6 @@ public class HeartbeatRequestTest extends ServerTestHarness {
             request.setGroup(group);
             request.setTerm(leader.getMemberState().currTerm() + 1);
             request.setIds(leader.getMemberState().getSelfId(), follower.getMemberState().getSelfId(), leader.getMemberState().getSelfId());
-            Assertions.assertEquals(DLedgerResponseCode.TERM_NOT_READY.getCode(), follower.handleHeartBeat(request).get().getCode());
             Thread.sleep(100);
             Assertions.assertEquals(DLedgerResponseCode.SUCCESS.getCode(), follower.handleHeartBeat(request).get().getCode());
         }

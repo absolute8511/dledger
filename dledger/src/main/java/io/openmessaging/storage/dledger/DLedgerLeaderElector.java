@@ -142,12 +142,9 @@ public class DLedgerLeaderElector {
                     return CompletableFuture.completedFuture(new HeartBeatResponse().code(DLedgerResponseCode.INCONSISTENT_LEADER.getCode()));
                 }
             } else {
-                //To make it simple, for larger term, do not change to follower immediately
-                //first change to candidate, and notify the state-maintainer thread
-                changeRoleToCandidate(request.getTerm());
-                needIncreaseTermImmediately = true;
-                //TOOD notify
-                return CompletableFuture.completedFuture(new HeartBeatResponse().code(DLedgerResponseCode.TERM_NOT_READY.getCode()));
+                //stepped down by larger term - convert to follower immediately (per Raft protocol)
+                changeRoleToFollower(request.getTerm(), request.getLeaderId());
+                return CompletableFuture.completedFuture(new HeartBeatResponse());
             }
         }
     }
@@ -187,6 +184,14 @@ public class DLedgerLeaderElector {
         nextTimeToRequestVote = -1;
     }
 
+    //just for test
+    public void setLastLeaderHeartBeatTime(long time) {
+        this.lastLeaderHeartBeatTime = time;
+    }
+    public long getLastLeaderHeartBeatTime() {
+        return lastLeaderHeartBeatTime;
+    }
+
     public void changeRoleToFollower(long term, String leaderId) {
         synchronized (memberState) {
             LOGGER.info("[{}][ChangeRoleToFollower] from term: {} leaderId: {} and currTerm: {}",
@@ -211,32 +216,36 @@ public class DLedgerLeaderElector {
                 return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_UNEXPECTED_LEADER));
             }
 
+            // Step 1: Check term first - if request has higher term, update our term and convert to follower
+            if (request.getTerm() > memberState.currTerm()) {
+                //stepped down by larger term - convert to follower first
+                changeRoleToFollower(request.getTerm(), null);
+                // After term update, we can now process the vote request in the new term
+                // Continue to ledger and other checks below
+            } else if (request.getTerm() < memberState.currTerm()) {
+                return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_EXPIRED_VOTE_TERM));
+            }
+
+            // Step 2: Now we're in the same term, check ledger conditions
             if (request.getLedgerEndTerm() < memberState.getLedgerEndTerm()) {
                 return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_EXPIRED_LEDGER_TERM));
             } else if (request.getLedgerEndTerm() == memberState.getLedgerEndTerm() && request.getLedgerEndIndex() < memberState.getLedgerEndIndex()) {
                 return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_SMALL_LEDGER_END_INDEX));
             }
 
-            if (request.getTerm() < memberState.currTerm()) {
-                return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_EXPIRED_VOTE_TERM));
-            } else if (request.getTerm() == memberState.currTerm()) {
-                if (memberState.currVoteFor() == null) {
-                    //let it go
-                } else if (memberState.currVoteFor().equals(request.getLeaderId())) {
-                    //repeat just let it go
-                } else {
-                    if (memberState.getLeaderId() != null) {
-                        return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_ALREADY_HAS_LEADER));
-                    } else {
-                        return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_ALREADY_VOTED));
-                    }
-                }
+            // Step 3: Check vote conditions in the same term
+            if (memberState.currVoteFor() == null) {
+                // let it go
+            } else if (memberState.currVoteFor().equals(request.getLeaderId())) {
+                // repeat just let it go
             } else {
-                //stepped down by larger term
-                changeRoleToCandidate(request.getTerm());
-                needIncreaseTermImmediately = true;
-                //only can handleVote when the term is consistent
-                return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_TERM_NOT_READY));
+                if (memberState.getLeaderId() != null) {
+                    return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm())
+                            .voteResult(VoteResponse.RESULT.REJECT_ALREADY_HAS_LEADER));
+                } else {
+                    return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm())
+                            .voteResult(VoteResponse.RESULT.REJECT_ALREADY_VOTED));
+                }
             }
 
             if (request.getTerm() < memberState.getLedgerEndTerm()) {
