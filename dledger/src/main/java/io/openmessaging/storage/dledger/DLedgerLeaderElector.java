@@ -142,9 +142,12 @@ public class DLedgerLeaderElector {
                     return CompletableFuture.completedFuture(new HeartBeatResponse().code(DLedgerResponseCode.INCONSISTENT_LEADER.getCode()));
                 }
             } else {
-                //stepped down by larger term - convert to follower immediately (per Raft protocol)
-                changeRoleToFollower(request.getTerm(), request.getLeaderId());
-                return CompletableFuture.completedFuture(new HeartBeatResponse());
+                //To make it simple, for larger term, do not change to follower immediately
+                //first change to candidate, and notify the state-maintainer thread
+                changeRoleToCandidate(request.getTerm());
+                needIncreaseTermImmediately = true;
+                //TOOD notify
+                return CompletableFuture.completedFuture(new HeartBeatResponse().code(DLedgerResponseCode.TERM_NOT_READY.getCode()));
             }
         }
     }
@@ -218,10 +221,11 @@ public class DLedgerLeaderElector {
 
             // Step 1: Check term first - if request has higher term, update our term and convert to follower
             if (request.getTerm() > memberState.currTerm()) {
-                //stepped down by larger term - convert to follower first
-                changeRoleToFollower(request.getTerm(), null);
-                // After term update, we can now process the vote request in the new term
-                // Continue to ledger and other checks below
+                // stepped down by larger term
+                changeRoleToCandidate(request.getTerm());
+                needIncreaseTermImmediately = true;
+                // only can handleVote when the term is consistent
+                return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_TERM_NOT_READY));
             } else if (request.getTerm() < memberState.currTerm()) {
                 return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_EXPIRED_VOTE_TERM));
             }
